@@ -35,7 +35,7 @@ case class PipeDriveFile(
   val orgName = Option(_orgName).map(_.replace(",", "")).getOrElse("null")
   val dealName = Option(_dealName).map(_.replace(",", "")).getOrElse("null")
   val name = _name.replace(",", "")
-  val file = s"${orgName}_${dealName}_${name}"
+  val file = s"${orgName}_${dealName}_${id}_${name}"
 }
 
 case class PipeDriveFiles(
@@ -48,13 +48,14 @@ object PipeDrive {
     //command line arguments...
     val startAt = 0
     val max = 3000
-    val parallelize = 1
+    val parallelize = 9
     val saveToDirectory = Paths.get("/Users/matthewpflueger/tmp/PipeDrive")
     val rootList = saveToDirectory.resolve("file_root_list.csv")
     val fileList = saveToDirectory.resolve("file_list.csv")
     val apiToken = "8accadbb8209e028305294910814c1a06205d4cc"
-    val timeoutSeconds = 500
+    val timeoutSeconds = 60
     val deleteDir = true
+    val appendOnly = false
 
     if (deleteDir) {
       import scala.sys.process._
@@ -97,8 +98,8 @@ object PipeDrive {
       rootList,
       Charset.defaultCharset(),
       StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING,
-      StandardOpenOption.WRITE)
+      StandardOpenOption.WRITE,
+      if (appendOnly) StandardOpenOption.APPEND else StandardOpenOption.TRUNCATE_EXISTING)
 
     def makePipeDriveFiles(str: String): PipeDriveFiles = {
       val json = upickle.json.read(str)
@@ -147,10 +148,8 @@ object PipeDrive {
         // this works but since the entity is streaming we would need to buffer
         // bytes if the json parse fails due to not enough data
         //.map(_.entity.dataBytes.via(fromStringToPipeDriveFiles).runWith(Sink.head()))
-        //.mapAsyncUnordered(_.map { pfs => (pfs.files, pfs.nextStart) })
-        //.mapAsync(_.map { pfs => (pfs.files, pfs.nextStart) })
-        .mapAsync(_.map { pfs => (pfs.files, pfs.nextStart) })
-//        .filter(tuple => tuple._1.nonEmpty)
+        .mapAsyncUnordered(_.map { pfs => (pfs.files, pfs.nextStart) })
+        .filter(tuple => tuple._1.nonEmpty)
 
     val concatPipeDriveFiles: Flow[List[PipeDriveFile], PipeDriveFile, Unit] =
       Flow[List[PipeDriveFile]].mapConcat(identity(_))
@@ -231,6 +230,10 @@ object PipeDrive {
           val path = saveToDirectory.resolve(pf.file)
           log.debug("Downloading to {}", path)
 
+          if (Files.exists(path)) {
+            log.warning("File {} already exists", path)
+          }
+
           Files.deleteIfExists(path)
 
 //          res.entity.dataBytes.runFold(0) { (count, bs) =>
@@ -262,8 +265,8 @@ object PipeDrive {
       fileList,
       Charset.defaultCharset(),
       StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING,
-      StandardOpenOption.WRITE)
+      StandardOpenOption.WRITE,
+      if (appendOnly) StandardOpenOption.APPEND else StandardOpenOption.TRUNCATE_EXISTING)
 
     val saveFileToList = Sink.fold[Int, DownloadedPipeDriveFile](1) { (count, f) =>
       fileListWriter.write(s"${f.pipeDriveFile.file}, ${f.pipeDriveFile.orgName}")
@@ -280,10 +283,7 @@ object PipeDrive {
       val download = b.add(downloadGraph)
       val downloadFile = b.add(downloadFileGraph)
 
-//      start ~> download.in(0)
       start ~> download ~> downloadFile ~> end
-//      download ~> downloadFile
-//      downloadFile ~> end.inlet
     }
 
 
